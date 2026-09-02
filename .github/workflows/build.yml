@@ -1,0 +1,30 @@
+name: APK Derle
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: Java kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Gradle ile derle
+        run: |
+          gradle wrapper --gradle-version 8.7
+          ./gradlew assembleDebug --no-daemon
+
+      - name: APK'yi yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tek-cizgi-bot-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
