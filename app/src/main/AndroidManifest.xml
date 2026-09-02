@@ -7,7 +7,7 @@
         android:allowBackup="true"
         android:label="Tek Cizgi Bot"
         android:icon="@android:drawable/ic_menu_compass"
-        android:theme="@android:style/Theme.Material.Light">
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"
