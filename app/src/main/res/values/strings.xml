@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Tek Cizgi Bot</string>
+    <string name="accessibility_service_description">Tek Cizgi oyununu otomatik cozer ve ekranda cizer.</string>
+</resources>
