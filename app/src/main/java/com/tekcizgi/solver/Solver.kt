@@ -5,12 +5,17 @@ data class Cell(val row: Int, val col: Int)
 class TekCizgiSolver(
     private val rows: Int,
     private val cols: Int,
-    private val checkpoints: Map<Cell, Int>
+    private val checkpoints: Map<Cell, Int>,
+    private val timeoutMs: Long = 4000L
 ) {
     private val totalCells = rows * cols
     private val maxCheckpoint = checkpoints.values.maxOrNull() ?: 0
     private val visited = Array(rows) { BooleanArray(cols) }
     private val path = mutableListOf<Cell>()
+    private var deadline = 0L
+    private var callCount = 0
+    var timedOut = false
+        private set
 
     private fun neighbors(cell: Cell): List<Cell> {
         val deltas = listOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)
@@ -22,12 +27,23 @@ class TekCizgiSolver(
     }
 
     fun solve(): List<Cell>? {
+        timedOut = false
+        callCount = 0
+        deadline = System.currentTimeMillis() + timeoutMs
         val start = checkpoints.entries.firstOrNull { it.value == 1 }?.key
             ?: throw IllegalArgumentException("1 numarali kontrol noktasi bulunamadi")
         return if (backtrack(start, 1)) path.toList() else null
     }
 
     private fun backtrack(cell: Cell, nextNeeded: Int): Boolean {
+        callCount++
+        if (callCount and 0x3FF == 0) {
+            if (System.currentTimeMillis() > deadline) {
+                timedOut = true
+                return false
+            }
+        }
+
         visited[cell.row][cell.col] = true
         path.add(cell)
 
@@ -52,6 +68,7 @@ class TekCizgiSolver(
         }
 
         for (next in neighbors(cell)) {
+            if (timedOut) return false
             if (!visited[next.row][next.col]) {
                 if (backtrack(next, nn)) return true
             }
