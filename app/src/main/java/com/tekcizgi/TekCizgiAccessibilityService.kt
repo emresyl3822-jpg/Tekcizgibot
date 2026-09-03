@@ -23,6 +23,10 @@ import android.widget.Toast
 import androidx.annotation.RequiresApi
 import com.tekcizgi.solver.Cell
 import com.tekcizgi.solver.TekCizgiSolver
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
+
+data class DetectedNumber(val value: Int, val centerX: Float, val centerY: Float, val width: Float, val height: Float)
 
 class TekCizgiAccessibilityService : AccessibilityService() {
 
@@ -69,7 +73,23 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         windowManager.addView(container, params)
     }
 
-    // --- TARAMA (diagnostic) ---
+    // --- ORTAK: agac tarama ---
+
+    private data class TextNode(val text: String, val bounds: Rect)
+
+    private fun collectTextNodes(node: AccessibilityNodeInfo, out: MutableList<TextNode>) {
+        val text = node.text?.toString()
+        if (!text.isNullOrBlank()) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            out.add(TextNode(text, bounds))
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { collectTextNodes(it, out) }
+        }
+    }
+
+    // --- TARAMA (diagnostic, elle kontrol icin) ---
 
     private fun onScanClicked() {
         val root = rootInActiveWindow
@@ -77,27 +97,13 @@ class TekCizgiAccessibilityService : AccessibilityService() {
             showTextOverlay("HATA: rootInActiveWindow bos.")
             return
         }
+        val nodes = mutableListOf<TextNode>()
+        collectTextNodes(root, nodes)
         val sb = StringBuilder()
-        dumpNode(root, sb, 0)
-        if (sb.isEmpty()) {
-            sb.append("Hicbir metin bulunamadi.")
+        for (n in nodes) {
+            sb.append("text='${n.text}' bounds=(${n.bounds.left},${n.bounds.top})-(${n.bounds.right},${n.bounds.bottom})\n")
         }
-        showTextOverlay(sb.toString())
-    }
-
-    private fun dumpNode(node: AccessibilityNodeInfo, sb: StringBuilder, depth: Int) {
-        val text = node.text?.toString()
-        val desc = node.contentDescription?.toString()
-        if (!text.isNullOrBlank() || !desc.isNullOrBlank()) {
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            sb.append("[${node.className?.toString()?.substringAfterLast('.')}] ")
-            sb.append("text='${text ?: ""}' desc='${desc ?: ""}' ")
-            sb.append("bounds=(${bounds.left},${bounds.top})-(${bounds.right},${bounds.bottom})\n")
-        }
-        for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { dumpNode(it, sb, depth + 1) }
-        }
+        showTextOverlay(if (sb.isEmpty()) "Hicbir metin bulunamadi." else sb.toString())
     }
 
     private fun closeOverlay() {
@@ -109,86 +115,155 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
     private fun showTextOverlay(content: String) {
         closeOverlay()
-
         val closeButton = Button(this).apply {
             text = "X KAPAT"
             setOnClickListener { closeOverlay() }
         }
-
         val tv = TextView(this).apply {
             text = content
             setTextColor(Color.WHITE)
             textSize = 11f
             setPadding(24, 24, 24, 24)
         }
-        val scrollView = ScrollView(this).apply {
-            addView(tv)
-        }
-
+        val scrollView = ScrollView(this).apply { addView(tv) }
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#EE000000"))
             addView(closeButton)
             addView(scrollView)
         }
-
         val params = WindowManager.LayoutParams(
             (resources.displayMetrics.widthPixels * 0.92).toInt(),
             (resources.displayMetrics.heightPixels * 0.75).toInt(),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             0,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.CENTER
-        }
-
+        ).apply { gravity = Gravity.CENTER }
         windowManager.addView(rootLayout, params)
         overlayView = rootLayout
-
-        // GUVENLIK: butona basilmasa bile 20 saniye sonra otomatik kapanir
         mainHandler.postDelayed({ closeOverlay() }, 20000)
     }
 
-    // --- COZME (hala test verisiyle) ---
+    // --- GERCEK COZME: ekrani oku, hesapla, ciz ---
 
     private fun onSolveClicked() {
-        Toast.makeText(this, "Buton calisti!", Toast.LENGTH_SHORT).show()
-        val rows = 5
-        val cols = 5
-        val checkpoints = mapOf(
-            Cell(3, 3) to 1,
-            Cell(0, 0) to 2,
-            Cell(1, 1) to 3,
-            Cell(4, 4) to 4
-        )
-        val gridLeft = 130f
-        val gridTop = 1815f
-        val cellSize = 213f
+        val root = rootInActiveWindow
+        if (root == null) {
+            Toast.makeText(this, "Ekran okunamadi", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val nodes = mutableListOf<TextNode>()
+        collectTextNodes(root, nodes)
+
+        val headerNode = nodes.firstOrNull { it.text.contains("kare") }
+        val instructionNode = nodes.firstOrNull { it.text.startsWith("Parmağını") }
+
+        if (headerNode == null || instructionNode == null) {
+            Toast.makeText(this, "Baslik/talimat metni bulunamadi", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val kareRegex = Regex("""/(\d+)\s*kare""")
+        val totalCellsMatch = kareRegex.find(headerNode.text)
+        if (totalCellsMatch == null) {
+            Toast.makeText(this, "Hucre sayisi okunamadi", Toast.LENGTH_LONG).show()
+            return
+        }
+        val totalCells = totalCellsMatch.groupValues[1].toInt()
+        val gridSize = sqrt(totalCells.toDouble()).roundToInt()
+
+        val topLimit = headerNode.bounds.bottom
+        val bottomLimit = instructionNode.bounds.top
+
+        val digitRegex = Regex("""^\d{1,2}$""")
+        val candidates = nodes.filter {
+            digitRegex.matches(it.text) &&
+            it.bounds.centerY() in topLimit..bottomLimit
+        }.map {
+            DetectedNumber(
+                value = it.text.toInt(),
+                centerX = it.bounds.centerX().toFloat(),
+                centerY = it.bounds.centerY().toFloat(),
+                width = it.bounds.width().toFloat(),
+                height = it.bounds.height().toFloat()
+            )
+        }
+
+        if (candidates.isEmpty()) {
+            Toast.makeText(this, "Kontrol noktalari bulunamadi", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val reference = candidates.firstOrNull { it.value == 1 }
+        if (reference == null) {
+            Toast.makeText(this, "1 numarali nokta bulunamadi", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val cellSize = candidates.map { (it.width + it.height) / 2f }.average().toFloat()
+
+        if (cellSize < 10f) {
+            Toast.makeText(this, "Hucre boyutu hesaplanamadi", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        data class RelPos(val value: Int, val relRow: Int, val relCol: Int, val screenX: Float, val screenY: Float)
+        val relList = candidates.map {
+            val relCol = ((it.centerX - reference.centerX) / cellSize).roundToInt()
+            val relRow = ((it.centerY - reference.centerY) / cellSize).roundToInt()
+            RelPos(it.value, relRow, relCol, it.centerX, it.centerY)
+        }
+
+        val minRow = relList.minOf { it.relRow }
+        val minCol = relList.minOf { it.relCol }
+
+        val checkpoints = mutableMapOf<Cell, Int>()
+        for (r in relList) {
+            val cell = Cell(r.relRow - minRow, r.relCol - minCol)
+            checkpoints[cell] = r.value
+        }
+
+        val maxRow = checkpoints.keys.maxOf { it.row }
+        val maxCol = checkpoints.keys.maxOf { it.col }
+        val rows = maxOf(gridSize, maxRow + 1)
+        val cols = maxOf(gridSize, maxCol + 1)
 
         val solver = TekCizgiSolver(rows, cols, checkpoints)
         val path = solver.solve()
 
         if (path == null) {
-            Log.e("TekCizgiBot", "Cozum bulunamadi")
+            Toast.makeText(this, "Cozum bulunamadi (rows=$rows cols=$cols cp=${checkpoints.size})", Toast.LENGTH_LONG).show()
             return
         }
 
-        drawPathOnScreen(path, gridLeft, gridTop, cellSize)
-    }
+        Toast.makeText(this, "Cozuldu! ${path.size} adim ciziliyor...", Toast.LENGTH_SHORT).show()
 
-    private fun cellCenter(cell: Cell, gridLeft: Float, gridTop: Float, cellSize: Float): Pair<Float, Float> {
-        val x = gridLeft + cell.col * cellSize + cellSize / 2f
-        val y = gridTop + cell.row * cellSize + cellSize / 2f
-        return x to y
+        val refRelRow = relList.first { it.value == 1 }.relRow - minRow
+        val refRelCol = relList.first { it.value == 1 }.relCol - minCol
+
+        drawPathOnScreen(path, reference.centerX, reference.centerY, refRelRow, refRelCol, cellSize)
     }
 
     @RequiresApi(Build.VERSION_CODES.N)
-    private fun drawPathOnScreen(path: List<Cell>, gridLeft: Float, gridTop: Float, cellSize: Float) {
+    private fun drawPathOnScreen(
+        path: List<Cell>,
+        refScreenX: Float,
+        refScreenY: Float,
+        refRow: Int,
+        refCol: Int,
+        cellSize: Float
+    ) {
+        fun cellToScreen(cell: Cell): Pair<Float, Float> {
+            val x = refScreenX + (cell.col - refCol) * cellSize
+            val y = refScreenY + (cell.row - refRow) * cellSize
+            return x to y
+        }
+
         val gesturePath = Path()
-        val (startX, startY) = cellCenter(path[0], gridLeft, gridTop, cellSize)
+        val (startX, startY) = cellToScreen(path[0])
         gesturePath.moveTo(startX, startY)
         for (i in 1 until path.size) {
-            val (x, y) = cellCenter(path[i], gridLeft, gridTop, cellSize)
+            val (x, y) = cellToScreen(path[i])
             gesturePath.lineTo(x, y)
         }
 
