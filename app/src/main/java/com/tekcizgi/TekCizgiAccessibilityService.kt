@@ -31,7 +31,9 @@ data class DetectedNumber(val value: Int, val centerX: Float, val centerY: Float
 class TekCizgiAccessibilityService : AccessibilityService() {
 
     private lateinit var windowManager: WindowManager
+    @Volatile private var isSolving = false
     private var overlayView: View? = null
+    private var buttonContainer: View? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
@@ -44,6 +46,10 @@ class TekCizgiAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     private fun showFloatingButtons() {
+        buttonContainer?.let {
+            try { windowManager.removeView(it) } catch (e: Exception) {}
+        }
+
         val solveButton = Button(this).apply {
             text = "Coz"
             setOnClickListener { onSolveClicked() }
@@ -71,9 +77,8 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         }
 
         windowManager.addView(container, params)
+        buttonContainer = container
     }
-
-    // --- ORTAK: agac tarama ---
 
     private data class TextNode(val text: String, val bounds: Rect)
 
@@ -88,8 +93,6 @@ class TekCizgiAccessibilityService : AccessibilityService() {
             node.getChild(i)?.let { collectTextNodes(it, out) }
         }
     }
-
-    // --- TARAMA (diagnostic, elle kontrol icin) ---
 
     private fun onScanClicked() {
         val root = rootInActiveWindow
@@ -144,104 +147,144 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed({ closeOverlay() }, 20000)
     }
 
-    // --- GERCEK COZME: ekrani oku, hesapla, ciz ---
-
     private fun onSolveClicked() {
-        val root = rootInActiveWindow
-        if (root == null) {
-            Toast.makeText(this, "Ekran okunamadi", Toast.LENGTH_SHORT).show()
+        if (isSolving) {
+            Toast.makeText(this, "Zaten calisiyor, bekle...", Toast.LENGTH_SHORT).show()
             return
         }
-        val nodes = mutableListOf<TextNode>()
-        collectTextNodes(root, nodes)
+        isSolving = true
 
-        val headerNode = nodes.firstOrNull { it.text.contains("kare") }
-        val instructionNode = nodes.firstOrNull { it.text.startsWith("Parmağını") }
+        Thread {
+            try {
+                val root = rootInActiveWindow
+                if (root == null) {
+                    mainHandler.post {
+                        Toast.makeText(this, "Ekran okunamadi", Toast.LENGTH_SHORT).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
+                val nodes = mutableListOf<TextNode>()
+                collectTextNodes(root, nodes)
 
-        if (headerNode == null || instructionNode == null) {
-            Toast.makeText(this, "Baslik/talimat metni bulunamadi", Toast.LENGTH_LONG).show()
-            return
-        }
+                val headerNode = nodes.firstOrNull { it.text.contains("kare") }
+                val instructionNode = nodes.firstOrNull { it.text.startsWith("Parmağını") }
 
-        val kareRegex = Regex("""/(\d+)\s*kare""")
-        val totalCellsMatch = kareRegex.find(headerNode.text)
-        if (totalCellsMatch == null) {
-            Toast.makeText(this, "Hucre sayisi okunamadi", Toast.LENGTH_LONG).show()
-            return
-        }
-        val totalCells = totalCellsMatch.groupValues[1].toInt()
-        val gridSize = sqrt(totalCells.toDouble()).roundToInt()
+                if (headerNode == null || instructionNode == null) {
+                    mainHandler.post {
+                        Toast.makeText(this, "Baslik/talimat metni bulunamadi", Toast.LENGTH_LONG).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
 
-        val topLimit = headerNode.bounds.bottom
-        val bottomLimit = instructionNode.bounds.top
+                val kareRegex = Regex("""/(\d+)\s*kare""")
+                val totalCellsMatch = kareRegex.find(headerNode.text)
+                if (totalCellsMatch == null) {
+                    mainHandler.post {
+                        Toast.makeText(this, "Hucre sayisi okunamadi", Toast.LENGTH_LONG).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
+                val totalCells = totalCellsMatch.groupValues[1].toInt()
+                val gridSize = sqrt(totalCells.toDouble()).roundToInt()
 
-        val digitRegex = Regex("""^\d{1,2}$""")
-        val candidates = nodes.filter {
-            digitRegex.matches(it.text) &&
-            it.bounds.centerY() in topLimit..bottomLimit
-        }.map {
-            DetectedNumber(
-                value = it.text.toInt(),
-                centerX = it.bounds.centerX().toFloat(),
-                centerY = it.bounds.centerY().toFloat(),
-                width = it.bounds.width().toFloat(),
-                height = it.bounds.height().toFloat()
-            )
-        }
+                val topLimit = headerNode.bounds.bottom
+                val bottomLimit = instructionNode.bounds.top
 
-        if (candidates.isEmpty()) {
-            Toast.makeText(this, "Kontrol noktalari bulunamadi", Toast.LENGTH_LONG).show()
-            return
-        }
+                val digitRegex = Regex("""^\d{1,2}$""")
+                val candidates = nodes.filter {
+                    digitRegex.matches(it.text) &&
+                    it.bounds.centerY() in topLimit..bottomLimit
+                }.map {
+                    DetectedNumber(
+                        value = it.text.toInt(),
+                        centerX = it.bounds.centerX().toFloat(),
+                        centerY = it.bounds.centerY().toFloat(),
+                        width = it.bounds.width().toFloat(),
+                        height = it.bounds.height().toFloat()
+                    )
+                }
 
-        val reference = candidates.firstOrNull { it.value == 1 }
-        if (reference == null) {
-            Toast.makeText(this, "1 numarali nokta bulunamadi", Toast.LENGTH_LONG).show()
-            return
-        }
+                if (candidates.isEmpty()) {
+                    mainHandler.post {
+                        Toast.makeText(this, "Kontrol noktalari bulunamadi", Toast.LENGTH_LONG).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
 
-        val cellSize = candidates.map { (it.width + it.height) / 2f }.average().toFloat()
+                val reference = candidates.firstOrNull { it.value == 1 }
+                if (reference == null) {
+                    mainHandler.post {
+                        Toast.makeText(this, "1 numarali nokta bulunamadi", Toast.LENGTH_LONG).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
 
-        if (cellSize < 10f) {
-            Toast.makeText(this, "Hucre boyutu hesaplanamadi", Toast.LENGTH_LONG).show()
-            return
-        }
+                val cellSize = candidates.map { (it.width + it.height) / 2f }.average().toFloat()
 
-        data class RelPos(val value: Int, val relRow: Int, val relCol: Int, val screenX: Float, val screenY: Float)
-        val relList = candidates.map {
-            val relCol = ((it.centerX - reference.centerX) / cellSize).roundToInt()
-            val relRow = ((it.centerY - reference.centerY) / cellSize).roundToInt()
-            RelPos(it.value, relRow, relCol, it.centerX, it.centerY)
-        }
+                if (cellSize < 10f) {
+                    mainHandler.post {
+                        Toast.makeText(this, "Hucre boyutu hesaplanamadi", Toast.LENGTH_LONG).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
 
-        val minRow = relList.minOf { it.relRow }
-        val minCol = relList.minOf { it.relCol }
+                data class RelPos(val value: Int, val relRow: Int, val relCol: Int, val screenX: Float, val screenY: Float)
+                val relList = candidates.map {
+                    val relCol = ((it.centerX - reference.centerX) / cellSize).roundToInt()
+                    val relRow = ((it.centerY - reference.centerY) / cellSize).roundToInt()
+                    RelPos(it.value, relRow, relCol, it.centerX, it.centerY)
+                }
 
-        val checkpoints = mutableMapOf<Cell, Int>()
-        for (r in relList) {
-            val cell = Cell(r.relRow - minRow, r.relCol - minCol)
-            checkpoints[cell] = r.value
-        }
+                val minRow = relList.minOf { it.relRow }
+                val minCol = relList.minOf { it.relCol }
 
-        val maxRow = checkpoints.keys.maxOf { it.row }
-        val maxCol = checkpoints.keys.maxOf { it.col }
-        val rows = maxOf(gridSize, maxRow + 1)
-        val cols = maxOf(gridSize, maxCol + 1)
+                val checkpoints = mutableMapOf<Cell, Int>()
+                for (r in relList) {
+                    val cell = Cell(r.relRow - minRow, r.relCol - minCol)
+                    checkpoints[cell] = r.value
+                }
 
-        val solver = TekCizgiSolver(rows, cols, checkpoints)
-        val path = solver.solve()
+                val maxRow = checkpoints.keys.maxOf { it.row }
+                val maxCol = checkpoints.keys.maxOf { it.col }
+                val rows = maxOf(gridSize, maxRow + 1)
+                val cols = maxOf(gridSize, maxCol + 1)
 
-        if (path == null) {
-            Toast.makeText(this, "Cozum bulunamadi (rows=$rows cols=$cols cp=${checkpoints.size})", Toast.LENGTH_LONG).show()
-            return
-        }
+                val solver = TekCizgiSolver(rows, cols, checkpoints, timeoutMs = 4000L)
+                val path = solver.solve()
 
-        Toast.makeText(this, "Cozuldu! ${path.size} adim ciziliyor...", Toast.LENGTH_SHORT).show()
+                if (path == null) {
+                    val msg = if (solver.timedOut) "Zaman asimi - cozum bulunamadi" else "Cozum bulunamadi (rows=$rows cols=$cols cp=${checkpoints.size})"
+                    mainHandler.post {
+                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
 
-        val refRelRow = relList.first { it.value == 1 }.relRow - minRow
-        val refRelCol = relList.first { it.value == 1 }.relCol - minCol
+                val refRelRow = relList.first { it.value == 1 }.relRow - minRow
+                val refRelCol = relList.first { it.value == 1 }.relCol - minCol
 
-        drawPathOnScreen(path, reference.centerX, reference.centerY, refRelRow, refRelCol, cellSize)
+                mainHandler.post {
+                    Toast.makeText(this, "Cozuldu! ${path.size} adim ciziliyor...", Toast.LENGTH_SHORT).show()
+                    drawPathOnScreen(path, reference.centerX, reference.centerY, refRelRow, refRelCol, cellSize)
+                    mainHandler.postDelayed({
+                        isSolving = false
+                        showFloatingButtons()
+                    }, (path.size * 80L).coerceAtLeast(500) + 300)
+                }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    Toast.makeText(this, "Hata: ${e.message}", Toast.LENGTH_LONG).show()
+                    isSolving = false
+                }
+            }
+        }.start()
     }
 
     @RequiresApi(Build.VERSION_CODES.N)
