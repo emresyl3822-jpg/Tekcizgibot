@@ -7,6 +7,8 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -26,6 +28,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
     private lateinit var windowManager: WindowManager
     private var overlayView: View? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -71,14 +74,13 @@ class TekCizgiAccessibilityService : AccessibilityService() {
     private fun onScanClicked() {
         val root = rootInActiveWindow
         if (root == null) {
-            showTextOverlay("HATA: rootInActiveWindow bos. Erisim izni calismiyor olabilir.")
+            showTextOverlay("HATA: rootInActiveWindow bos.")
             return
         }
         val sb = StringBuilder()
         dumpNode(root, sb, 0)
         if (sb.isEmpty()) {
-            sb.append("Hicbir metin/aciklama bulunamadi. Bu ekran muhtemelen\n")
-            sb.append("Canvas/WebView ile ciziliyor, erisilebilirlik agaci gormuyor.")
+            sb.append("Hicbir metin bulunamadi.")
         }
         showTextOverlay(sb.toString())
     }
@@ -98,29 +100,41 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun showTextOverlay(content: String) {
+    private fun closeOverlay() {
         overlayView?.let {
             try { windowManager.removeView(it) } catch (e: Exception) {}
         }
+        overlayView = null
+    }
+
+    private fun showTextOverlay(content: String) {
+        closeOverlay()
+
+        val closeButton = Button(this).apply {
+            text = "X KAPAT"
+            setOnClickListener { closeOverlay() }
+        }
 
         val tv = TextView(this).apply {
-            text = content + "\n\n[Kapatmak icin buraya dokun]"
+            text = content
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#DD000000"))
             textSize = 11f
             setPadding(24, 24, 24, 24)
         }
         val scrollView = ScrollView(this).apply {
             addView(tv)
-            setOnClickListener {
-                windowManager.removeView(this)
-                overlayView = null
-            }
+        }
+
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#EE000000"))
+            addView(closeButton)
+            addView(scrollView)
         }
 
         val params = WindowManager.LayoutParams(
             (resources.displayMetrics.widthPixels * 0.92).toInt(),
-            (resources.displayMetrics.heightPixels * 0.7).toInt(),
+            (resources.displayMetrics.heightPixels * 0.75).toInt(),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             0,
             PixelFormat.TRANSLUCENT
@@ -128,8 +142,11 @@ class TekCizgiAccessibilityService : AccessibilityService() {
             gravity = Gravity.CENTER
         }
 
-        windowManager.addView(scrollView, params)
-        overlayView = scrollView
+        windowManager.addView(rootLayout, params)
+        overlayView = rootLayout
+
+        // GUVENLIK: butona basilmasa bile 20 saniye sonra otomatik kapanir
+        mainHandler.postDelayed({ closeOverlay() }, 20000)
     }
 
     // --- COZME (hala test verisiyle) ---
