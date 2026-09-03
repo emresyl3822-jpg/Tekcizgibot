@@ -2,37 +2,53 @@ package com.tekcizgi
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
 import androidx.annotation.RequiresApi
 import com.tekcizgi.solver.Cell
 import com.tekcizgi.solver.TekCizgiSolver
 
 class TekCizgiAccessibilityService : AccessibilityService() {
 
-    private var floatingButton: View? = null
     private lateinit var windowManager: WindowManager
+    private var overlayView: View? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        showFloatingButton()
+        showFloatingButtons()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 
-    private fun showFloatingButton() {
-        val button = Button(this).apply {
+    private fun showFloatingButtons() {
+        val solveButton = Button(this).apply {
             text = "Coz"
             setOnClickListener { onSolveClicked() }
+        }
+        val scanButton = Button(this).apply {
+            text = "Tara"
+            setOnClickListener { onScanClicked() }
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(scanButton)
+            addView(solveButton)
         }
 
         val params = WindowManager.LayoutParams(
@@ -47,11 +63,79 @@ class TekCizgiAccessibilityService : AccessibilityService() {
             y = 200
         }
 
-        windowManager.addView(button, params)
-        floatingButton = button
+        windowManager.addView(container, params)
     }
 
+    // --- TARAMA (diagnostic) ---
+
+    private fun onScanClicked() {
+        val root = rootInActiveWindow
+        if (root == null) {
+            showTextOverlay("HATA: rootInActiveWindow bos. Erisim izni calismiyor olabilir.")
+            return
+        }
+        val sb = StringBuilder()
+        dumpNode(root, sb, 0)
+        if (sb.isEmpty()) {
+            sb.append("Hicbir metin/aciklama bulunamadi. Bu ekran muhtemelen\n")
+            sb.append("Canvas/WebView ile ciziliyor, erisilebilirlik agaci gormuyor.")
+        }
+        showTextOverlay(sb.toString())
+    }
+
+    private fun dumpNode(node: AccessibilityNodeInfo, sb: StringBuilder, depth: Int) {
+        val text = node.text?.toString()
+        val desc = node.contentDescription?.toString()
+        if (!text.isNullOrBlank() || !desc.isNullOrBlank()) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            sb.append("[${node.className?.toString()?.substringAfterLast('.')}] ")
+            sb.append("text='${text ?: ""}' desc='${desc ?: ""}' ")
+            sb.append("bounds=(${bounds.left},${bounds.top})-(${bounds.right},${bounds.bottom})\n")
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { dumpNode(it, sb, depth + 1) }
+        }
+    }
+
+    private fun showTextOverlay(content: String) {
+        overlayView?.let {
+            try { windowManager.removeView(it) } catch (e: Exception) {}
+        }
+
+        val tv = TextView(this).apply {
+            text = content + "\n\n[Kapatmak icin buraya dokun]"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#DD000000"))
+            textSize = 11f
+            setPadding(24, 24, 24, 24)
+        }
+        val scrollView = ScrollView(this).apply {
+            addView(tv)
+            setOnClickListener {
+                windowManager.removeView(this)
+                overlayView = null
+            }
+        }
+
+        val params = WindowManager.LayoutParams(
+            (resources.displayMetrics.widthPixels * 0.92).toInt(),
+            (resources.displayMetrics.heightPixels * 0.7).toInt(),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            0,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+
+        windowManager.addView(scrollView, params)
+        overlayView = scrollView
+    }
+
+    // --- COZME (hala test verisiyle) ---
+
     private fun onSolveClicked() {
+        Toast.makeText(this, "Buton calisti!", Toast.LENGTH_SHORT).show()
         val rows = 5
         val cols = 5
         val checkpoints = mapOf(
@@ -92,13 +176,8 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         }
 
         val durationMs = (path.size * 80).toLong().coerceAtLeast(500)
-
-        val strokeDescription = GestureDescription.StrokeDescription(
-            gesturePath, 0, durationMs
-        )
-        val gestureDescription = GestureDescription.Builder()
-            .addStroke(strokeDescription)
-            .build()
+        val strokeDescription = GestureDescription.StrokeDescription(gesturePath, 0, durationMs)
+        val gestureDescription = GestureDescription.Builder().addStroke(strokeDescription).build()
 
         dispatchGesture(gestureDescription, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
