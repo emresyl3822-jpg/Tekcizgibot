@@ -109,6 +109,34 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         showTextOverlay(if (sb.isEmpty()) "Hicbir metin bulunamadi." else sb.toString())
     }
 
+    private fun showMessage(text: String, durationMs: Long = 2500) {
+        val tv = TextView(this).apply {
+            this.text = text
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#DD000000"))
+            setPadding(28, 20, 28, 20)
+            textSize = 13f
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM
+            y = 180
+        }
+        try {
+            windowManager.addView(tv, params)
+            mainHandler.postDelayed({
+                try { windowManager.removeView(tv) } catch (e: Exception) {}
+            }, durationMs)
+        } catch (e: Exception) {
+            Log.e("TekCizgiBot", "showMessage basarisiz: ${e.message}")
+        }
+    }
+
     private fun closeOverlay() {
         overlayView?.let {
             try { windowManager.removeView(it) } catch (e: Exception) {}
@@ -149,7 +177,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
     private fun onSolveClicked() {
         if (isSolving) {
-            Toast.makeText(this, "Zaten calisiyor, bekle...", Toast.LENGTH_SHORT).show()
+            showMessage("Zaten calisiyor, bekle...")
             return
         }
         isSolving = true
@@ -159,7 +187,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                 val root = rootInActiveWindow
                 if (root == null) {
                     mainHandler.post {
-                        Toast.makeText(this, "Ekran okunamadi", Toast.LENGTH_SHORT).show()
+                        showMessage("Ekran okunamadi")
                         isSolving = false
                     }
                     return@Thread
@@ -172,7 +200,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
                 if (headerNode == null || instructionNode == null) {
                     mainHandler.post {
-                        Toast.makeText(this, "Baslik/talimat metni bulunamadi", Toast.LENGTH_LONG).show()
+                        showMessage("Baslik/talimat metni bulunamadi")
                         isSolving = false
                     }
                     return@Thread
@@ -182,7 +210,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                 val totalCellsMatch = kareRegex.find(headerNode.text)
                 if (totalCellsMatch == null) {
                     mainHandler.post {
-                        Toast.makeText(this, "Hucre sayisi okunamadi", Toast.LENGTH_LONG).show()
+                        showMessage("Hucre sayisi okunamadi")
                         isSolving = false
                     }
                     return@Thread
@@ -196,7 +224,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                 val gridHeightPx = gridBottomLimit - gridTop
                 if (gridHeightPx < 50f) {
                     mainHandler.post {
-                        Toast.makeText(this, "Izgara alani hesaplanamadi", Toast.LENGTH_LONG).show()
+                        showMessage("Izgara alani hesaplanamadi")
                         isSolving = false
                     }
                     return@Thread
@@ -221,7 +249,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
                 if (candidates.isEmpty()) {
                     mainHandler.post {
-                        Toast.makeText(this, "Kontrol noktalari bulunamadi", Toast.LENGTH_LONG).show()
+                        showMessage("Kontrol noktalari bulunamadi")
                         isSolving = false
                     }
                     return@Thread
@@ -236,7 +264,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
                 if (!checkpoints.values.contains(1)) {
                     mainHandler.post {
-                        Toast.makeText(this, "1 numarali nokta bulunamadi", Toast.LENGTH_LONG).show()
+                        showMessage("1 numarali nokta bulunamadi")
                         isSolving = false
                     }
                     return@Thread
@@ -248,14 +276,14 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                 if (path == null) {
                     val msg = if (solver.timedOut) "Zaman asimi - cozum bulunamadi" else "Cozum bulunamadi (cp=${checkpoints.size})"
                     mainHandler.post {
-                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                        showMessage(msg)
                         isSolving = false
                     }
                     return@Thread
                 }
 
                 mainHandler.post {
-                    Toast.makeText(this, "Cozuldu! ${path.size} adim ciziliyor...", Toast.LENGTH_SHORT).show()
+                    showMessage("Cozuldu! ${path.size} adim ciziliyor...")
                     drawPathOnScreen(path, gridLeft, gridTop, cellSize) {
                         isSolving = false
                         showFloatingButtons()
@@ -263,7 +291,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                 }
             } catch (e: Exception) {
                 mainHandler.post {
-                    Toast.makeText(this, "Hata: ${e.message}", Toast.LENGTH_LONG).show()
+                    showMessage("Hata: ${e.message}")
                     isSolving = false
                 }
             }
@@ -321,7 +349,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
             watchdog = Runnable {
                 Log.e("TekCizgiBot", "Parca $startIndex-$endIndex takildi, iptal ediliyor")
-                Toast.makeText(this, "Cizim takildi, durduruldu", Toast.LENGTH_SHORT).show()
+                showMessage("Cizim takildi, durduruldu")
                 finishOnce()
             }
             mainHandler.postDelayed(watchdog!!, segDuration + 2000)
@@ -335,7 +363,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                     watchdog?.let { mainHandler.removeCallbacks(it) }
                     Log.e("TekCizgiBot", "Parca $startIndex-$endIndex iptal edildi")
                     mainHandler.post {
-                        Toast.makeText(this@TekCizgiAccessibilityService, "Cizim iptal edildi ($startIndex/${path.size})", Toast.LENGTH_SHORT).show()
+                        showMessage("Cizim iptal edildi ($startIndex/${path.size})")
                         finishOnce()
                     }
                 }
@@ -344,7 +372,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
             if (!dispatched) {
                 watchdog?.let { mainHandler.removeCallbacks(it) }
                 Log.e("TekCizgiBot", "dispatchGesture basarisiz (parca $startIndex)")
-                Toast.makeText(this, "Cizim baslatilamadi, tekrar dene", Toast.LENGTH_SHORT).show()
+                showMessage("Cizim baslatilamadi, tekrar dene")
                 finishOnce()
             }
         }
