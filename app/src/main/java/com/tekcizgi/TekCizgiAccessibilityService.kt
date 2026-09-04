@@ -284,18 +284,6 @@ class TekCizgiAccessibilityService : AccessibilityService() {
             return x to y
         }
 
-        val gesturePath = Path()
-        val (startX, startY) = cellToScreen(path[0])
-        gesturePath.moveTo(startX, startY)
-        for (i in 1 until path.size) {
-            val (x, y) = cellToScreen(path[i])
-            gesturePath.lineTo(x, y)
-        }
-
-        val durationMs = (path.size * 80).toLong().coerceAtLeast(500)
-        val strokeDescription = GestureDescription.StrokeDescription(gesturePath, 0, durationMs)
-        val gestureDescription = GestureDescription.Builder().addStroke(strokeDescription).build()
-
         var finished = false
         fun finishOnce() {
             if (!finished) {
@@ -304,24 +292,63 @@ class TekCizgiAccessibilityService : AccessibilityService() {
             }
         }
 
-        val dispatched = dispatchGesture(gestureDescription, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                Log.d("TekCizgiBot", "Cizim tamamlandi")
-                mainHandler.post { finishOnce() }
-            }
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                Log.e("TekCizgiBot", "Cizim iptal edildi")
-                mainHandler.post { finishOnce() }
-            }
-        }, null)
+        val chunkSize = 5
+        var watchdog: Runnable? = null
 
-        if (!dispatched) {
-            Log.e("TekCizgiBot", "dispatchGesture basarisiz oldu (false dondu)")
-            Toast.makeText(this, "Cizim baslatilamadi, tekrar dene", Toast.LENGTH_SHORT).show()
-            finishOnce()
-            return
+        fun dispatchChunk(startIndex: Int, prevStroke: GestureDescription.StrokeDescription?) {
+            if (startIndex >= path.size - 1) {
+                watchdog?.let { mainHandler.removeCallbacks(it) }
+                finishOnce()
+                return
+            }
+            val endIndex = minOf(startIndex + chunkSize, path.size - 1)
+            val segmentPath = Path()
+            val (sx, sy) = cellToScreen(path[startIndex])
+            segmentPath.moveTo(sx, sy)
+            for (i in (startIndex + 1)..endIndex) {
+                val (x, y) = cellToScreen(path[i])
+                segmentPath.lineTo(x, y)
+            }
+            val segDuration = ((endIndex - startIndex) * 90L).coerceAtLeast(100)
+            val willContinue = endIndex < path.size - 1
+
+            val stroke = if (prevStroke == null) {
+                GestureDescription.StrokeDescription(segmentPath, 0, segDuration, willContinue)
+            } else {
+                prevStroke.continueStroke(segmentPath, 0, segDuration, willContinue)
+            }
+            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+            watchdog = Runnable {
+                Log.e("TekCizgiBot", "Parca $startIndex-$endIndex takildi, iptal ediliyor")
+                Toast.makeText(this, "Cizim takildi, durduruldu", Toast.LENGTH_SHORT).show()
+                finishOnce()
+            }
+            mainHandler.postDelayed(watchdog!!, segDuration + 2000)
+
+            val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    watchdog?.let { mainHandler.removeCallbacks(it) }
+                    mainHandler.post { dispatchChunk(endIndex, stroke) }
+                }
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    watchdog?.let { mainHandler.removeCallbacks(it) }
+                    Log.e("TekCizgiBot", "Parca $startIndex-$endIndex iptal edildi")
+                    mainHandler.post {
+                        Toast.makeText(this@TekCizgiAccessibilityService, "Cizim iptal edildi ($startIndex/${path.size})", Toast.LENGTH_SHORT).show()
+                        finishOnce()
+                    }
+                }
+            }, null)
+
+            if (!dispatched) {
+                watchdog?.let { mainHandler.removeCallbacks(it) }
+                Log.e("TekCizgiBot", "dispatchGesture basarisiz (parca $startIndex)")
+                Toast.makeText(this, "Cizim baslatilamadi, tekrar dene", Toast.LENGTH_SHORT).show()
+                finishOnce()
+            }
         }
 
-        mainHandler.postDelayed({ finishOnce() }, durationMs + 2500)
+        dispatchChunk(0, null)
     }
 }
