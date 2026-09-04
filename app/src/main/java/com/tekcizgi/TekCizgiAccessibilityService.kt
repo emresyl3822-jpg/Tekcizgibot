@@ -190,13 +190,25 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                 val totalCells = totalCellsMatch.groupValues[1].toInt()
                 val gridSize = sqrt(totalCells.toDouble()).roundToInt()
 
-                val topLimit = headerNode.bounds.bottom
-                val bottomLimit = instructionNode.bounds.top
+                val screenWidth = resources.displayMetrics.widthPixels.toFloat()
+                val gridTop = headerNode.bounds.bottom.toFloat()
+                val gridBottomLimit = instructionNode.bounds.top.toFloat()
+                val gridHeightPx = gridBottomLimit - gridTop
+                if (gridHeightPx < 50f) {
+                    mainHandler.post {
+                        Toast.makeText(this, "Izgara alani hesaplanamadi", Toast.LENGTH_LONG).show()
+                        isSolving = false
+                    }
+                    return@Thread
+                }
+                val cellSize = gridHeightPx / gridSize
+                val gridWidthPx = cellSize * gridSize
+                val gridLeft = (screenWidth - gridWidthPx) / 2f
 
                 val digitRegex = Regex("""^\d{1,2}$""")
                 val candidates = nodes.filter {
                     digitRegex.matches(it.text) &&
-                    it.bounds.centerY() in topLimit..bottomLimit
+                    it.bounds.centerY() in gridTop.toInt()..gridBottomLimit.toInt()
                 }.map {
                     DetectedNumber(
                         value = it.text.toInt(),
@@ -215,8 +227,14 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                     return@Thread
                 }
 
-                val reference = candidates.firstOrNull { it.value == 1 }
-                if (reference == null) {
+                val checkpoints = mutableMapOf<Cell, Int>()
+                for (c in candidates) {
+                    val col = ((c.centerX - gridLeft) / cellSize).toInt().coerceIn(0, gridSize - 1)
+                    val row = ((c.centerY - gridTop) / cellSize).toInt().coerceIn(0, gridSize - 1)
+                    checkpoints[Cell(row, col)] = c.value
+                }
+
+                if (!checkpoints.values.contains(1)) {
                     mainHandler.post {
                         Toast.makeText(this, "1 numarali nokta bulunamadi", Toast.LENGTH_LONG).show()
                         isSolving = false
@@ -224,42 +242,11 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                     return@Thread
                 }
 
-                val cellSize = candidates.map { (it.width + it.height) / 2f }.average().toFloat()
-
-                if (cellSize < 10f) {
-                    mainHandler.post {
-                        Toast.makeText(this, "Hucre boyutu hesaplanamadi", Toast.LENGTH_LONG).show()
-                        isSolving = false
-                    }
-                    return@Thread
-                }
-
-                data class RelPos(val value: Int, val relRow: Int, val relCol: Int, val screenX: Float, val screenY: Float)
-                val relList = candidates.map {
-                    val relCol = ((it.centerX - reference.centerX) / cellSize).roundToInt()
-                    val relRow = ((it.centerY - reference.centerY) / cellSize).roundToInt()
-                    RelPos(it.value, relRow, relCol, it.centerX, it.centerY)
-                }
-
-                val minRow = relList.minOf { it.relRow }
-                val minCol = relList.minOf { it.relCol }
-
-                val checkpoints = mutableMapOf<Cell, Int>()
-                for (r in relList) {
-                    val cell = Cell(r.relRow - minRow, r.relCol - minCol)
-                    checkpoints[cell] = r.value
-                }
-
-                val maxRow = checkpoints.keys.maxOf { it.row }
-                val maxCol = checkpoints.keys.maxOf { it.col }
-                val rows = maxOf(gridSize, maxRow + 1)
-                val cols = maxOf(gridSize, maxCol + 1)
-
-                val solver = TekCizgiSolver(rows, cols, checkpoints, timeoutMs = 4000L)
+                val solver = TekCizgiSolver(gridSize, gridSize, checkpoints, timeoutMs = 4000L)
                 val path = solver.solve()
 
                 if (path == null) {
-                    val msg = if (solver.timedOut) "Zaman asimi - cozum bulunamadi" else "Cozum bulunamadi (rows=$rows cols=$cols cp=${checkpoints.size})"
+                    val msg = if (solver.timedOut) "Zaman asimi - cozum bulunamadi" else "Cozum bulunamadi (cp=${checkpoints.size})"
                     mainHandler.post {
                         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                         isSolving = false
@@ -267,16 +254,12 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                     return@Thread
                 }
 
-                val refRelRow = relList.first { it.value == 1 }.relRow - minRow
-                val refRelCol = relList.first { it.value == 1 }.relCol - minCol
-
                 mainHandler.post {
                     Toast.makeText(this, "Cozuldu! ${path.size} adim ciziliyor...", Toast.LENGTH_SHORT).show()
-                    drawPathOnScreen(path, reference.centerX, reference.centerY, refRelRow, refRelCol, cellSize)
-                    mainHandler.postDelayed({
+                    drawPathOnScreen(path, gridLeft, gridTop, cellSize) {
                         isSolving = false
                         showFloatingButtons()
-                    }, (path.size * 80L).coerceAtLeast(500) + 300)
+                    }
                 }
             } catch (e: Exception) {
                 mainHandler.post {
@@ -290,15 +273,14 @@ class TekCizgiAccessibilityService : AccessibilityService() {
     @RequiresApi(Build.VERSION_CODES.N)
     private fun drawPathOnScreen(
         path: List<Cell>,
-        refScreenX: Float,
-        refScreenY: Float,
-        refRow: Int,
-        refCol: Int,
-        cellSize: Float
+        gridLeft: Float,
+        gridTop: Float,
+        cellSize: Float,
+        onFinished: () -> Unit
     ) {
         fun cellToScreen(cell: Cell): Pair<Float, Float> {
-            val x = refScreenX + (cell.col - refCol) * cellSize
-            val y = refScreenY + (cell.row - refRow) * cellSize
+            val x = gridLeft + cell.col * cellSize + cellSize / 2f
+            val y = gridTop + cell.row * cellSize + cellSize / 2f
             return x to y
         }
 
@@ -314,13 +296,32 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         val strokeDescription = GestureDescription.StrokeDescription(gesturePath, 0, durationMs)
         val gestureDescription = GestureDescription.Builder().addStroke(strokeDescription).build()
 
-        dispatchGesture(gestureDescription, object : GestureResultCallback() {
+        var finished = false
+        fun finishOnce() {
+            if (!finished) {
+                finished = true
+                onFinished()
+            }
+        }
+
+        val dispatched = dispatchGesture(gestureDescription, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 Log.d("TekCizgiBot", "Cizim tamamlandi")
+                mainHandler.post { finishOnce() }
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 Log.e("TekCizgiBot", "Cizim iptal edildi")
+                mainHandler.post { finishOnce() }
             }
         }, null)
+
+        if (!dispatched) {
+            Log.e("TekCizgiBot", "dispatchGesture basarisiz oldu (false dondu)")
+            Toast.makeText(this, "Cizim baslatilamadi, tekrar dene", Toast.LENGTH_SHORT).show()
+            finishOnce()
+            return
+        }
+
+        mainHandler.postDelayed({ finishOnce() }, durationMs + 2500)
     }
 }
