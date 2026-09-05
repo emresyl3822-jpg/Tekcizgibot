@@ -137,7 +137,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
 
         val cx = resources.displayMetrics.widthPixels / 2f
         val cy = resources.displayMetrics.heightPixels / 2f
-        val offset = 300f
+        val offset = 750f
         val topY = cy - offset / 2f
         val bottomY = cy + offset / 2f
 
@@ -147,7 +147,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
         val movePath = Path()
         movePath.moveTo(cx, fromY)
         movePath.lineTo(cx, toY)
-        val moveDuration = 700L
+        val moveDuration = 1750L
 
         val moveStroke = if (currentStroke == null) {
             GestureDescription.StrokeDescription(movePath, 0, moveDuration, true)
@@ -161,7 +161,7 @@ class TekCizgiAccessibilityService : AccessibilityService() {
                 if (!isRunning) return
                 currentStroke = moveStroke
 
-                val waitMs = Random.nextLong(3000, 5001)
+                val waitMs = 4000L
                 val waitPath = Path()
                 waitPath.moveTo(cx, toY)
                 waitPath.lineTo(cx, toY)
